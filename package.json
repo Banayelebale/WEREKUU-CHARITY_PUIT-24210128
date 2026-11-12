@@ -1,0 +1,24 @@
+{
+  "name": "hostel-management-system",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js",
+    "setup": "node src/setup.js && npm run db:migrate && npm run db:seed",
+    "admin:create": "node src/create-admin.js",
+    "admin:reset-password": "node src/reset-admin-password.js",
+    "db:migrate": "node src/migrate.js",
+    "db:seed": "node src/seed.js",
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=20.0"
+  },
+  "dependencies": {
+    "@libsql/client": "^0.18.0",
+    "hash-wasm": "^4.13.0",
+    "nodemailer": "^10.1.6"
+  }
+}

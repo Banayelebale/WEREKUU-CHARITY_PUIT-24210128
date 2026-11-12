@@ -1,0 +1,27 @@
+{
+  "expo": {
+    "name": "Haven Hostel Management",
+    "slug": "haven-hms",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "splash": {
+      "backgroundColor": "#f6f7fb"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.haven.hms"
+    },
+    "android": {
+      "package": "com.haven.hms",
+      "adaptiveIcon": {
+        "backgroundColor": "#f6f7fb",
+        "foregroundImage": "./assets/android-icon-foreground.png"
+      }
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    }
+  }
+}
