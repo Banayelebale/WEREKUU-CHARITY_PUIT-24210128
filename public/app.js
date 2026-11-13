@@ -205,8 +205,8 @@ function startOtpExpiryCountdown(expiresInSeconds = 300) {
     if (otpResendButton) {
       otpResendButton.disabled = remaining > 0;
       otpResendButton.textContent = remaining > 0
-        ? `Resend code in ${Math.floor(remaining / 60)}:${String(remaining % 60).padStart(2, "0")}`
-        : "Resend code";
+        ? `Resend 6-digit code in ${Math.floor(remaining / 60)}:${String(remaining % 60).padStart(2, "0")}`
+        : "Resend 6-digit code";
     }
     if (!remaining && otpExpiryTimer) {
       clearInterval(otpExpiryTimer);
@@ -275,6 +275,9 @@ if (otpResendButton) {
       });
       const otpInput = otpForm?.querySelector("input[name='code']");
       if (otpInput) otpInput.value = "";
+      if (otpResendStatus) {
+        otpResendStatus.textContent = "A new six-digit verification code was sent. It expires in five minutes.";
+      }
       showMessage(result.demoCode
         ? `${result.message} Code: ${result.demoCode}`
         : result.message || "A new verification code was sent.");
@@ -283,7 +286,7 @@ if (otpResendButton) {
     } catch (error) {
       showMessage(error.message, true);
       otpResendButton.disabled = false;
-      otpResendButton.textContent = "Resend code";
+      otpResendButton.textContent = "Resend 6-digit code";
     }
   });
 }
