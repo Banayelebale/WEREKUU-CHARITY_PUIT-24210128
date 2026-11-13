@@ -8,7 +8,7 @@ async function createFixture(options = {}) {
   const db = createDatabase(":memory:");
   await db.exec(readFileSync(new URL("../src/schema.sql", import.meta.url), "utf8"));
   const auth = createAuth(db, "test-only-pepper-with-at-least-32-bytes", {
-    otpEnabled: true,
+    demoOtpEnabled: true,
     ...options
   });
   return {
@@ -140,7 +140,7 @@ test("password login requires a valid one-time OTP and issues an HttpOnly sessio
     const restartedAuth = createAuth(
       fixture.db,
       "test-only-pepper-with-at-least-32-bytes",
-      { otpEnabled: true }
+      { demoOtpEnabled: true }
     );
     assert.equal((await restartedAuth.currentUser(request)).role, "hall_master");
     await restartedAuth.logout(request);
@@ -204,6 +204,7 @@ test("resending an expired OTP requires the password and invalidates the previou
 test("email OTP is delivered without exposing the code in the login response", async () => {
   const delivered = [];
   const fixture = await createFixture({
+    demoOtpEnabled: false,
     sendOtpEmail: async (email) => delivered.push(email)
   });
   try {
@@ -230,13 +231,10 @@ test("email OTP is delivered without exposing the code in the login response", a
   }
 });
 
-test("development demo OTP remains usable when email delivery fails", async () => {
-  const originalError = console.error;
-  console.error = () => {};
+test("demo mode returns the OTP in the login response without sending email", async () => {
+  let deliveryAttempts = 0;
   const fixture = await createFixture({
-    sendOtpEmail: async () => {
-      throw new Error("SMTP connection refused");
-    }
+    sendOtpEmail: async () => { deliveryAttempts += 1; }
   });
   try {
     await fixture.auth.register({
@@ -250,13 +248,13 @@ test("development demo OTP remains usable when email delivery fails", async () =
     );
     assert.equal(result.status, 200);
     assert.match(result.body.demoCode, /^\d{6}$/);
+    assert.equal(deliveryAttempts, 0);
     assert.equal((await fixture.auth.verifyOtp({
       email: "offline-mail@example.test",
       code: result.body.demoCode
     })).status, 200);
   } finally {
     fixture.close();
-    console.error = originalError;
   }
 });
 
@@ -264,7 +262,7 @@ test("production OTP delivery failure does not expose a demo code", async () => 
   const originalError = console.error;
   console.error = () => {};
   const fixture = await createFixture({
-    otpEnabled: false,
+    demoOtpEnabled: false,
     sendOtpEmail: async () => {
       throw new Error("SMTP connection refused");
     }

@@ -12,9 +12,12 @@ const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "
 const backupDirectory = path.resolve(projectRoot, process.env.BACKUP_DIRECTORY ?? "./backups");
 
 const auth = createAuth(db, process.env.AUTH_PEPPER, {
-  otpEnabled: process.env.NODE_ENV !== "production" && process.env.DEMO_OTP === "true",
-  sendOtpEmail: createOtpEmailSender()
+  demoOtpEnabled: process.env.DEMO_OTP === "true",
+  sendOtpEmail: process.env.DEMO_OTP === "true" ? undefined : createOtpEmailSender()
 });
+if (process.env.DEMO_OTP === "true") {
+  console.warn("DEMO_OTP is enabled: OTPs are returned in API responses and email verification is bypassed.");
+}
 const backups = createConfigBackupStore(db, process.env.BACKUP_ENCRYPTION_KEY, backupDirectory);
 const operations = createOperations(db);
 

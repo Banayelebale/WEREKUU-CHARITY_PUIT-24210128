@@ -1,5 +1,3 @@
-import { Resend } from "resend";
-const resend = new Resend(process.env.RESEND_API_KEY);
 import { argon2id } from "hash-wasm";
 import {
   createHash,
@@ -110,7 +108,7 @@ export function createAuth(db, pepperString, options = {}) {
     throw new Error("AUTH_PEPPER must be configured with at least 32 bytes.");
   }
   const pepper = Buffer.from(pepperString, "utf8");
-  const otpEnabled = options.otpEnabled ?? false;
+  const demoOtpEnabled = options.demoOtpEnabled ?? false;
   const sendOtpEmail = options.sendOtpEmail;
   const attemptsByKey = new Map();
 
@@ -134,6 +132,13 @@ export function createAuth(db, pepperString, options = {}) {
   }
 
   async function issueOtp(user) {
+    if (!demoOtpEnabled && !sendOtpEmail) {
+      return {
+        status: 503,
+        body: { error: "Email verification is not configured. Sign-in is unavailable." }
+      };
+    }
+
     const previousChallenge = await db.prepare(
       "SELECT code_hash FROM otp_challenges WHERE user_id = ? ORDER BY id DESC LIMIT 1"
     ).get(user.id);
@@ -152,22 +157,22 @@ export function createAuth(db, pepperString, options = {}) {
       "INSERT INTO otp_challenges (user_id, code_hash, expires_at) VALUES (?, ?, ?)"
     ).run(user.id, codeHash, expiresAt)).lastInsertRowid;
 
+    if (demoOtpEnabled) {
+      return {
+        status: 200,
+        body: {
+          message: "Demo mode: enter this six-digit code. It expires in five minutes.",
+          demoCode: code,
+          expiresInSeconds: OTP_TTL_MS / 1000
+        }
+      };
+    }
+
     if (sendOtpEmail) {
       try {
         await sendOtpEmail({ to: user.email, code });
       } catch (error) {
         console.error("OTP email delivery failed:", error);
-        if (otpEnabled) {
-          console.info(`[DEMO OTP] ${user.email}: ${code} (expires in 5 minutes)`);
-          return {
-            status: 200,
-            body: {
-              message: "Email delivery failed. Use this development-only verification code.",
-              demoCode: code,
-              expiresInSeconds: OTP_TTL_MS / 1000
-            }
-          };
-        }
         await db.prepare(
           "UPDATE otp_challenges SET consumed_at = CURRENT_TIMESTAMP WHERE id = ?"
         ).run(challengeId);
@@ -184,16 +189,7 @@ export function createAuth(db, pepperString, options = {}) {
         }
       };
     }
-
-    console.info(`[DEMO OTP] ${user.email}: ${code} (expires in 5 minutes)`);
-    return {
-      status: 200,
-      body: {
-        message: "Verification code sent. Check the development server terminal.",
-        demoCode: code,
-        expiresInSeconds: OTP_TTL_MS / 1000
-      }
-    };
+    throw new Error("OTP email delivery is unavailable.");
   }
 
   async function register({ username, email, password, role = "student" }, request) {
@@ -283,13 +279,6 @@ export function createAuth(db, pepperString, options = {}) {
     if (!user || !user.is_active || !safeEqual(actual, user.password_hash)) {
       return { status: 401, body: { error: "Invalid email or password." } };
     }
-    if (!otpEnabled && !sendOtpEmail) {
-      return {
-        status: 503,
-        body: { error: "Email verification is not configured. Sign-in is unavailable." }
-      };
-    }
-
     return issueOtp(user);
   }
 
@@ -302,14 +291,6 @@ export function createAuth(db, pepperString, options = {}) {
     ) {
       return { status: 429, body: { error: "Too many code requests. Try again later." } };
     }
-// Inside your OTP generation function, replace or add below your console.log:
-await resend.emails.send({
-  from: "onboarding@resend.dev",
-  to: userEmail, // Make sure this variable holds the user's email address
-  subject: "Your HMS Verification Code",
-  html: <p>Your OTP verification code is: <strong>${otp}</strong></p>,
-});
-
     const user = await db.prepare(
       "SELECT id, email, password_hash, password_salt, is_active FROM users WHERE email = ?"
     ).get(normalizedEmail);

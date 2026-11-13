@@ -90,11 +90,12 @@ Because Vercel is a serverless platform with an ephemeral filesystem, we use **T
    - `INITIAL_ADMIN_PASSWORD`: A secure password (minimum 8 characters)
    - `RESEND_API_KEY`: Required for production OTP email, from [resend.com](https://resend.com)
    - `MAIL_FROM`: A sender address on a domain verified with Resend (for example, `Haven Hostel <login@your-verified-domain.com>`)
+   - `DEMO_OTP`: Leave unset or `false` for real email verification. Set to `true` only for a demo; OTPs will be returned in API responses instead of being emailed, bypassing the second factor.
 4. Click **Deploy**.
 5. Vercel will build and deploy your site. You will receive a live URL (e.g., `https://haven-hms.vercel.app`).
    - The database tables will be created automatically on the first request!
    - You can sign in using your configured initial admin credentials.
-   - OTP codes are sent to the email address on the account. Production does not expose OTPs in Vercel logs; configure a working Resend or SMTP sender before signing in.
+   - With `DEMO_OTP` unset or `false`, OTP codes are sent to the email address on the account. Configure a working Resend or SMTP sender before signing in.
 
 ---
 
