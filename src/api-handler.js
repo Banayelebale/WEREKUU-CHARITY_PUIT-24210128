@@ -82,7 +82,13 @@ export async function handleApiRequest(request, response) {
   );
 
   try {
-    const pathname = new URL(request.url ?? "/", "http://localhost").pathname;
+    const requestUrl = new URL(request.url ?? "/", "http://localhost");
+    const rewrittenRoute = requestUrl.pathname === "/api/index.js"
+      ? requestUrl.searchParams.get("route")
+      : null;
+    const pathname = rewrittenRoute
+      ? `/api/${rewrittenRoute.replace(/^\/+/, "")}`
+      : requestUrl.pathname;
 
     if (["POST", "PATCH", "DELETE"].includes(request.method) && request.headers.origin) {
       try {
@@ -187,6 +193,7 @@ export async function handleApiRequest(request, response) {
       let result;
       if (pathname === "/api/auth/register") result = await auth.register(body, request);
       else if (pathname === "/api/auth/login") result = await auth.login(body, request);
+      else if (pathname === "/api/auth/resend-otp") result = await auth.resendOtp(body);
       else if (pathname === "/api/auth/verify-otp") result = await auth.verifyOtp(body);
       else if (pathname === "/api/auth/logout") result = await auth.logout(request);
       else {

@@ -122,6 +122,63 @@ export function createAuth(db, pepperString, options = {}) {
     return current.count > limit;
   }
 
+  async function issueOtp(user, previousCodeHash = null) {
+    let code;
+    let codeHash;
+    do {
+      code = String(randomInt(0, 1_000_000)).padStart(6, "0");
+      codeHash = createHmac("sha256", pepper).update(`${user.id}:${code}`).digest("hex");
+    } while (codeHash === previousCodeHash);
+
+    const expiresAt = new Date(Date.now() + OTP_TTL_MS).toISOString();
+    await db.prepare(
+      "UPDATE otp_challenges SET consumed_at = CURRENT_TIMESTAMP WHERE user_id = ? AND consumed_at IS NULL"
+    ).run(user.id);
+    const challengeId = (await db.prepare(
+      "INSERT INTO otp_challenges (user_id, code_hash, expires_at) VALUES (?, ?, ?)"
+    ).run(user.id, codeHash, expiresAt)).lastInsertRowid;
+
+    if (sendOtpEmail) {
+      try {
+        await sendOtpEmail({ to: user.email, code });
+      } catch (error) {
+        console.error("OTP email delivery failed:", error);
+        if (otpEnabled) {
+          console.info(`[DEMO OTP] ${user.email}: ${code} (expires in 5 minutes)`);
+          return {
+            status: 200,
+            body: {
+              message: "Email delivery failed. Use this development-only verification code.",
+              demoCode: code,
+              expiresAt
+            }
+          };
+        }
+        await db.prepare(
+          "UPDATE otp_challenges SET consumed_at = CURRENT_TIMESTAMP WHERE id = ?"
+        ).run(challengeId);
+        return {
+          status: 503,
+          body: { error: "Could not send the verification email. Check the Resend or SMTP configuration and try again." }
+        };
+      }
+      return {
+        status: 200,
+        body: { message: "Verification code sent to your email. It expires in five minutes.", expiresAt }
+      };
+    }
+
+    console.info(`[DEMO OTP] ${user.email}: ${code} (expires in 5 minutes)`);
+    return {
+      status: 200,
+      body: {
+        message: "Verification code sent. Check the development server terminal.",
+        demoCode: code,
+        expiresAt
+      }
+    };
+  }
+
   async function cleanExpired() {
     const now = Date.now();
     await db.prepare("DELETE FROM auth_sessions WHERE expires_at <= ?").run(new Date(now).toISOString());
@@ -224,51 +281,43 @@ export function createAuth(db, pepperString, options = {}) {
       };
     }
 
-    const code = String(randomInt(0, 1_000_000)).padStart(6, "0");
-    const expiresAt = new Date(Date.now() + OTP_TTL_MS).toISOString();
-    const codeHash = createHmac("sha256", pepper).update(`${user.id}:${code}`).digest("hex");
-    await db.prepare(
-      "UPDATE otp_challenges SET consumed_at = CURRENT_TIMESTAMP WHERE user_id = ? AND consumed_at IS NULL"
-    ).run(user.id);
-    const challengeId = (await db.prepare(
-      "INSERT INTO otp_challenges (user_id, code_hash, expires_at) VALUES (?, ?, ?)"
-    ).run(user.id, codeHash, expiresAt)).lastInsertRowid;
-    if (sendOtpEmail) {
-      try {
-        await sendOtpEmail({ to: user.email, code });
-      } catch (error) {
-        console.error("OTP email delivery failed:", error);
-        if (otpEnabled) {
-          console.info(`[DEMO OTP] ${user.email}: ${code} (expires in 5 minutes)`);
-          return {
-            status: 200,
-            body: {
-              message: "Email delivery failed. Use this development-only verification code.",
-              demoCode: code
-            }
-          };
-        }
-        await db.prepare(
-          "UPDATE otp_challenges SET consumed_at = CURRENT_TIMESTAMP WHERE id = ?"
-        ).run(challengeId);
-        return {
-          status: 503,
-          body: { error: "Could not send the verification email. Check the SMTP service and try again." }
-        };
-      }
-      return {
-        status: 200,
-        body: { message: "Verification code sent to your email. It expires in five minutes." }
-      };
+    const previousChallenge = await db.prepare(
+      "SELECT code_hash FROM otp_challenges WHERE user_id = ? ORDER BY id DESC LIMIT 1"
+    ).get(user.id);
+    return issueOtp(user, previousChallenge?.code_hash);
+  }
+
+  async function resendOtp({ email }) {
+    const normalizedEmail = normalizeEmail(email ?? "");
+    const user = await db.prepare(
+      "SELECT id, email FROM users WHERE email = ? AND is_active = 1"
+    ).get(normalizedEmail);
+    if (!user) return { status: 401, body: { error: "No pending verification request. Sign in again." } };
+
+    const challenge = await db.prepare(
+      `SELECT id, code_hash, expires_at FROM otp_challenges
+       WHERE user_id = ? AND consumed_at IS NULL ORDER BY id DESC LIMIT 1`
+    ).get(user.id);
+    if (!challenge) {
+      return { status: 401, body: { error: "No pending verification request. Sign in again." } };
     }
-    console.info(`[DEMO OTP] ${user.email}: ${code} (expires in 5 minutes)`);
-    return {
-      status: 200,
-      body: {
-        message: "Verification code sent. Check the development server terminal.",
-        demoCode: code
-      }
-    };
+    if (Date.parse(challenge.expires_at) > Date.now()) {
+      return { status: 429, body: { error: "Your current code has not expired yet. Use it or wait for it to expire." } };
+    }
+
+    const recentResends = await db.prepare(
+      `SELECT COUNT(*) AS count FROM audit_logs
+       WHERE actor_user_id = ? AND action = 'auth.otp_resent'
+         AND created_at >= datetime('now', '-15 minutes')`
+    ).get(user.id);
+    if (Number(recentResends.count) >= 3) {
+      return { status: 429, body: { error: "Too many resend requests. Try again in 15 minutes." } };
+    }
+
+    await db.prepare(
+      "INSERT INTO audit_logs (actor_user_id, action, target_type, target_id) VALUES (?, 'auth.otp_resent', 'user', ?)"
+    ).run(user.id, String(user.id));
+    return issueOtp(user, challenge.code_hash);
   }
 
   async function verifyOtp({ email, code }) {
@@ -635,6 +684,7 @@ export function createAuth(db, pepperString, options = {}) {
   return {
     register,
     login,
+    resendOtp,
     verifyOtp,
     currentUser,
     listUsers,

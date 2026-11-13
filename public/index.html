@@ -75,13 +75,15 @@
             <button class="button button-primary auth-submit" type="submit">Create account</button>
             <p class="auth-hint">Choose any password with at least 8 characters. No special symbols are required. Your password is securely hashed. Student accounts are active immediately; Hall President and Hall Master/Mistress requests must be approved by a Main Admin. Main Admin accounts are created separately by the system administrator.</p>
           </form>
-          <form id="otp-panel" class="auth-form" hidden>
+          <form id="otp-panel" class="auth-form" hidden novalidate>
             <p class="card-kicker">SECOND STEP</p>
             <h2>Check your code</h2>
             <p class="card-description">Enter the six-digit verification code for <strong id="otp-email"></strong>. It expires in five minutes.</p>
             <label for="otp-code">Email verification code</label>
-            <input id="otp-code" name="code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" minlength="6" maxlength="6" required>
+            <input id="otp-code" name="code" type="text" inputmode="numeric" autocomplete="off" placeholder="000000" autocapitalize="off" spellcheck="false" aria-label="Six-digit email verification code">
             <button class="button button-primary auth-submit" type="submit">Verify and sign in</button>
+            <p id="otp-expiry-status" class="auth-hint" aria-live="polite"></p>
+            <button id="resend-otp-button" class="text-button" type="button" disabled>Resend code in 5:00</button>
             <button class="text-button" id="back-to-login" type="button">Back to sign in</button>
           </form>
           <div id="signed-in-panel" class="auth-form" hidden>

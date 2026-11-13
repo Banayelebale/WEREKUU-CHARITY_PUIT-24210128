@@ -150,6 +150,72 @@ test("password login requires a valid one-time OTP and issues an HttpOnly sessio
   }
 });
 
+test("each successful login issues a fresh code and invalidates the previous code", async () => {
+  const fixture = await createFixture();
+  try {
+    await fixture.auth.register({
+      username: "fresh_code_user",
+      email: "fresh-code@example.test",
+      password: "correct horse battery staple"
+    });
+    const firstLogin = await fixture.auth.login(
+      { email: "fresh-code@example.test", password: "correct horse battery staple" },
+      fixture.request
+    );
+    const secondLogin = await fixture.auth.login(
+      { email: "fresh-code@example.test", password: "correct horse battery staple" },
+      fixture.request
+    );
+
+    assert.notEqual(firstLogin.body.demoCode, secondLogin.body.demoCode);
+    assert.equal((await fixture.auth.verifyOtp({
+      email: "fresh-code@example.test",
+      code: firstLogin.body.demoCode
+    })).status, 401);
+    assert.equal((await fixture.auth.verifyOtp({
+      email: "fresh-code@example.test",
+      code: secondLogin.body.demoCode
+    })).status, 200);
+  } finally {
+    fixture.close();
+  }
+});
+
+test("OTP can be resent after expiry and resend attempts are limited", async () => {
+  const fixture = await createFixture();
+  try {
+    await fixture.auth.register({
+      username: "resend_user",
+      email: "resend@example.test",
+      password: "correct horse battery staple"
+    });
+    const login = await fixture.auth.login(
+      { email: "resend@example.test", password: "correct horse battery staple" },
+      fixture.request
+    );
+    assert.equal((await fixture.auth.resendOtp({ email: "resend@example.test" })).status, 429);
+
+    let latestCode = login.body.demoCode;
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      await fixture.db.prepare(
+        "UPDATE otp_challenges SET expires_at = ? WHERE user_id = 1 AND consumed_at IS NULL"
+      ).run(new Date(Date.now() - 1000).toISOString());
+      const resent = await fixture.auth.resendOtp({ email: "resend@example.test" });
+      assert.equal(resent.status, 200);
+      assert.notEqual(resent.body.demoCode, latestCode);
+      latestCode = resent.body.demoCode;
+    }
+
+    await fixture.db.prepare(
+      "UPDATE otp_challenges SET expires_at = ? WHERE user_id = 1 AND consumed_at IS NULL"
+    ).run(new Date(Date.now() - 1000).toISOString());
+    const rateLimited = await fixture.auth.resendOtp({ email: "resend@example.test" });
+    assert.equal(rateLimited.status, 429);
+  } finally {
+    fixture.close();
+  }
+});
+
 test("email OTP is delivered without exposing the code in the login response", async () => {
   const delivered = [];
   const fixture = await createFixture({

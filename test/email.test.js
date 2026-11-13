@@ -33,6 +33,14 @@ test("Resend HTTP API sends OTP without requiring SMTP configuration", async () 
   });
 });
 
+test("production requires a configured OTP email provider", async () => {
+  const sendOtpEmail = createOtpEmailSender({ NODE_ENV: "production" });
+  await assert.rejects(
+    sendOtpEmail({ to: "lecturer@example.test", code: "123456" }),
+    /OTP email delivery is not configured/
+  );
+});
+
 test("Resend API errors are surfaced to the OTP flow", async () => {
   const sendOtpEmail = createOtpEmailSender({
     RESEND_API_KEY: "test-resend-key"

@@ -35,10 +35,45 @@ const dashboardTitle = document.querySelector("#operations-title");
 const dashboardEyebrow = operationsDashboard.querySelector(".eyebrow");
 const dashboardSubtitle = document.querySelector("#dashboard-subtitle");
 let pendingEmail = "";
+let otpExpiresAt = 0;
+let otpCountdownTimer = null;
+let otpRequestPending = false;
 let dashboardRole = "";
 let dashboardData = null;
 let reportData = null;
 let reportFilter = "";
+
+function updateOtpCountdown() {
+  const resendButton = document.querySelector("#resend-otp-button");
+  const expiryStatus = document.querySelector("#otp-expiry-status");
+  if (!resendButton || !expiryStatus) return;
+
+  const remainingMs = Math.max(0, otpExpiresAt - Date.now());
+  if (remainingMs === 0) {
+    expiryStatus.textContent = "Your code has expired. You can request a new one.";
+    resendButton.textContent = "Resend code";
+    resendButton.disabled = otpRequestPending;
+    if (otpCountdownTimer) {
+      clearInterval(otpCountdownTimer);
+      otpCountdownTimer = null;
+    }
+    return;
+  }
+
+  const remainingSeconds = Math.ceil(remainingMs / 1000);
+  const minutes = Math.floor(remainingSeconds / 60);
+  const seconds = String(remainingSeconds % 60).padStart(2, "0");
+  expiryStatus.textContent = `Your code expires in ${minutes}:${seconds}.`;
+  resendButton.textContent = `Resend code in ${minutes}:${seconds}`;
+  resendButton.disabled = true;
+}
+
+function startOtpCountdown(expiresAt) {
+  otpExpiresAt = Date.parse(expiresAt) || Date.now() + 5 * 60 * 1000;
+  if (otpCountdownTimer) clearInterval(otpCountdownTimer);
+  updateOtpCountdown();
+  otpCountdownTimer = setInterval(updateOtpCountdown, 1000);
+}
 
 function showMessage(text, isError = false) {
   const target = !document.body.classList.contains("authenticated")
@@ -209,10 +244,16 @@ if (loginForm) {
       hideMessage();
       const result = await api("/api/auth/login", { email, password });
       pendingEmail = email;
+      const otpEmail = document.querySelector("#otp-email");
+      const otpInput = otpForm?.querySelector("input[name='code']");
+      if (otpEmail) otpEmail.textContent = email;
+      if (otpInput) otpInput.value = "";
       showPanel("otp");
+      startOtpCountdown(result.expiresAt);
       showMessage(result.demoCode
         ? `${result.message} Code: ${result.demoCode}`
-        : result.message || "Verification code sent. Check your server logs for the 6-digit code.");
+        : result.message || "Verification code sent. Check your email for the 6-digit code.");
+      otpInput?.focus();
     } catch (error) {
       showMessage(error.message, true);
     } finally {
@@ -249,11 +290,34 @@ if (registerForm) {
 }
 
 if (otpForm) {
-  // Ensure the code input field allows 6 digits
   const otpInput = otpForm.querySelector("input[name='code'], input[type='text']");
+  const resendButton = document.querySelector("#resend-otp-button");
   if (otpInput) {
-    otpInput.setAttribute("maxLength", "6");
-    otpInput.setAttribute("pattern", "[0-9]{6}");
+    otpInput.addEventListener("input", () => {
+      otpInput.value = otpInput.value.replace(/\D/g, "").slice(0, 6);
+    });
+  }
+  if (resendButton) {
+    resendButton.addEventListener("click", async () => {
+      if (Date.now() < otpExpiresAt || otpRequestPending) return;
+      otpRequestPending = true;
+      resendButton.disabled = true;
+      try {
+        const result = await api("/api/auth/resend-otp", { email: pendingEmail });
+        if (otpInput) otpInput.value = "";
+        startOtpCountdown(result.expiresAt);
+        showMessage(result.demoCode
+          ? `${result.message} Code: ${result.demoCode}`
+          : result.message || "A new verification code was sent to your email.");
+        otpInput?.focus();
+      } catch (error) {
+        showMessage(error.message, true);
+        resendButton.disabled = Date.now() < otpExpiresAt;
+      } finally {
+        otpRequestPending = false;
+        updateOtpCountdown();
+      }
+    });
   }
 
 // Navigation listeners are shared by desktop and mobile controls.
@@ -269,8 +333,10 @@ bindNavigation(mobileAdminLink, "/admin");
     event.preventDefault();
     const code = otpInput?.value?.trim();
 
-    if (!code || code.length !== 6) {
+    if (!code || !/^\d{6}$/.test(code)) {
       showMessage("Please enter the full 6-digit verification code.", true);
+      otpInput?.focus();
+      otpInput?.select();
       return;
     }
 
@@ -283,6 +349,8 @@ bindNavigation(mobileAdminLink, "/admin");
       showSignedIn(result.user);
     } catch (error) {
       showMessage(error.message, true);
+      otpInput?.focus();
+      otpInput?.select();
     } finally {
       if (submitBtn) submitBtn.disabled = false;
     }

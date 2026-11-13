@@ -71,11 +71,17 @@ export function createOtpEmailSender(env = process.env, fetchImpl = globalThis.f
     });
   }
 
-  // --- FALLBACK: LOG OTP TO RENDER CONSOLE (Bypasses SMTP & API blocks) ---
-  console.warn("⚠️ No SMTP or Resend API key configured. Falling back to Console OTP mode.");
+  if (env.NODE_ENV === "production") {
+    console.error("OTP email delivery is unavailable. Configure RESEND_API_KEY or SMTP settings.");
+    return async () => {
+      throw new Error("OTP email delivery is not configured.");
+    };
+  }
+
+  console.warn("No SMTP or Resend API key configured. Falling back to development console OTP mode.");
   return async ({ to, code }) => {
     console.log("\n========================================");
-    console.log(`🔑 [DEV/DEMO OTP for ${to}]: ${code}`);
+    console.log(`[DEV/DEMO OTP for ${to}]: ${code}`);
     console.log("========================================\n");
   };
 }
