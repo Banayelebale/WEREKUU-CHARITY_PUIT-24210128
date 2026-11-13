@@ -150,38 +150,7 @@ test("password login requires a valid one-time OTP and issues an HttpOnly sessio
   }
 });
 
-test("each successful login issues a fresh code and invalidates the previous code", async () => {
-  const fixture = await createFixture();
-  try {
-    await fixture.auth.register({
-      username: "fresh_code_user",
-      email: "fresh-code@example.test",
-      password: "correct horse battery staple"
-    });
-    const firstLogin = await fixture.auth.login(
-      { email: "fresh-code@example.test", password: "correct horse battery staple" },
-      fixture.request
-    );
-    const secondLogin = await fixture.auth.login(
-      { email: "fresh-code@example.test", password: "correct horse battery staple" },
-      fixture.request
-    );
-
-    assert.notEqual(firstLogin.body.demoCode, secondLogin.body.demoCode);
-    assert.equal((await fixture.auth.verifyOtp({
-      email: "fresh-code@example.test",
-      code: firstLogin.body.demoCode
-    })).status, 401);
-    assert.equal((await fixture.auth.verifyOtp({
-      email: "fresh-code@example.test",
-      code: secondLogin.body.demoCode
-    })).status, 200);
-  } finally {
-    fixture.close();
-  }
-});
-
-test("OTP can be resent after expiry and resend attempts are limited", async () => {
+test("resending an expired OTP requires the password and invalidates the previous code", async () => {
   const fixture = await createFixture();
   try {
     await fixture.auth.register({
@@ -189,28 +158,44 @@ test("OTP can be resent after expiry and resend attempts are limited", async () 
       email: "resend@example.test",
       password: "correct horse battery staple"
     });
-    const login = await fixture.auth.login(
+
+    const first = await fixture.auth.login(
       { email: "resend@example.test", password: "correct horse battery staple" },
       fixture.request
     );
-    assert.equal((await fixture.auth.resendOtp({ email: "resend@example.test" })).status, 429);
+    assert.equal(first.status, 200);
 
-    let latestCode = login.body.demoCode;
-    for (let attempt = 0; attempt < 3; attempt += 1) {
-      await fixture.db.prepare(
-        "UPDATE otp_challenges SET expires_at = ? WHERE user_id = 1 AND consumed_at IS NULL"
-      ).run(new Date(Date.now() - 1000).toISOString());
-      const resent = await fixture.auth.resendOtp({ email: "resend@example.test" });
-      assert.equal(resent.status, 200);
-      assert.notEqual(resent.body.demoCode, latestCode);
-      latestCode = resent.body.demoCode;
-    }
+    const tooEarly = await fixture.auth.resendOtp(
+      { email: "resend@example.test", password: "correct horse battery staple" },
+      fixture.request
+    );
+    assert.equal(tooEarly.status, 409);
 
     await fixture.db.prepare(
-      "UPDATE otp_challenges SET expires_at = ? WHERE user_id = 1 AND consumed_at IS NULL"
-    ).run(new Date(Date.now() - 1000).toISOString());
-    const rateLimited = await fixture.auth.resendOtp({ email: "resend@example.test" });
-    assert.equal(rateLimited.status, 429);
+      "UPDATE otp_challenges SET expires_at = ? WHERE user_id = (SELECT id FROM users WHERE email = ?)"
+    ).run(new Date(Date.now() - 1000).toISOString(), "resend@example.test");
+
+    const wrongPassword = await fixture.auth.resendOtp(
+      { email: "resend@example.test", password: "wrong password" },
+      fixture.request
+    );
+    assert.equal(wrongPassword.status, 401);
+
+    const resent = await fixture.auth.resendOtp(
+      { email: "resend@example.test", password: "correct horse battery staple" },
+      fixture.request
+    );
+    assert.equal(resent.status, 200);
+    assert.match(resent.body.demoCode, /^\d{6}$/);
+    assert.notEqual(resent.body.demoCode, first.body.demoCode);
+    assert.equal((await fixture.auth.verifyOtp({
+      email: "resend@example.test",
+      code: first.body.demoCode
+    })).status, 401);
+    assert.equal((await fixture.auth.verifyOtp({
+      email: "resend@example.test",
+      code: resent.body.demoCode
+    })).status, 200);
   } finally {
     fixture.close();
   }

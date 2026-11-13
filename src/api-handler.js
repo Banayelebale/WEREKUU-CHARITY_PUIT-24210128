@@ -193,7 +193,7 @@ export async function handleApiRequest(request, response) {
       let result;
       if (pathname === "/api/auth/register") result = await auth.register(body, request);
       else if (pathname === "/api/auth/login") result = await auth.login(body, request);
-      else if (pathname === "/api/auth/resend-otp") result = await auth.resendOtp(body);
+      else if (pathname === "/api/auth/resend-otp") result = await auth.resendOtp(body, request);
       else if (pathname === "/api/auth/verify-otp") result = await auth.verifyOtp(body);
       else if (pathname === "/api/auth/logout") result = await auth.logout(request);
       else {

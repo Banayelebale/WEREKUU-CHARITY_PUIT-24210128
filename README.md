@@ -11,7 +11,7 @@ A modern, cloud-ready hostel management system built with Node.js, serverless SQ
   - **Hall Master/Mistress**: Operational management (resident registration, room allocation, check-in, check-out).
   - **Hall President**: Read-only oversight of operations, room vacancies, and occupancy/revenue reports.
   - **Student**: Account registration and personal Haven Hall status tracking.
-- **Two-Factor Authentication**: Passwords hashed with Argon2id + server pepper; 6-digit OTP delivery via HTTPS email API (Resend) or local Mailpit/demo code.
+- **Two-Factor Authentication**: Passwords hashed with Argon2id + server pepper; 6-digit OTP delivery via HTTPS email API (Resend) or local Mailpit/demo code. Expired codes can be resent after password confirmation; the previous code is invalidated.
 - **Hostel Operations**: Room capacity validation, gender segregation checks, room reassignments, check-ins, and check-outs.
 - **Automated Audit Logging**: Append-only audit events tracking account updates, check-ins, check-outs, and role assignments.
 - **Multi-Platform Support**: Responsive web application + native Android mobile application.
@@ -94,7 +94,7 @@ Because Vercel is a serverless platform with an ephemeral filesystem, we use **T
 5. Vercel will build and deploy your site. You will receive a live URL (e.g., `https://haven-hms.vercel.app`).
    - The database tables will be created automatically on the first request!
    - You can sign in using your configured initial admin credentials.
-   - OTP codes are sent to the email address on the account. Each successful login creates a fresh code that expires after five minutes; the previous code is invalidated. After expiration, the sign-in form offers a resend action (limited to three resends per 15 minutes). Production does not expose OTPs in Vercel logs; configure a working Resend or SMTP sender before signing in.
+   - OTP codes are sent to the email address on the account. Production does not expose OTPs in Vercel logs; configure a working Resend or SMTP sender before signing in.
 
 ---
 

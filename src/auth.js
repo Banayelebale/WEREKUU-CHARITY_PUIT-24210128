@@ -15,6 +15,7 @@ const ARGON2_OPTIONS = {
   passes: 2
 };
 const OTP_TTL_MS = 5 * 60 * 1000;
+const MAX_OTP_PER_HOUR = 5;
 const SESSION_TTL_MS = 8 * 60 * 60 * 1000;
 const MAX_OTP_ATTEMPTS = 5;
 const COOKIE_NAME = "hms_session";
@@ -122,13 +123,24 @@ export function createAuth(db, pepperString, options = {}) {
     return current.count > limit;
   }
 
-  async function issueOtp(user, previousCodeHash = null) {
+  async function cleanExpired() {
+    const now = Date.now();
+    await db.prepare("DELETE FROM auth_sessions WHERE expires_at <= ?").run(new Date(now).toISOString());
+    for (const [key, entry] of attemptsByKey) {
+      if (entry.resetAt <= now) attemptsByKey.delete(key);
+    }
+  }
+
+  async function issueOtp(user) {
+    const previousChallenge = await db.prepare(
+      "SELECT code_hash FROM otp_challenges WHERE user_id = ? ORDER BY id DESC LIMIT 1"
+    ).get(user.id);
     let code;
     let codeHash;
     do {
       code = String(randomInt(0, 1_000_000)).padStart(6, "0");
       codeHash = createHmac("sha256", pepper).update(`${user.id}:${code}`).digest("hex");
-    } while (codeHash === previousCodeHash);
+    } while (previousChallenge && safeEqual(codeHash, previousChallenge.code_hash));
 
     const expiresAt = new Date(Date.now() + OTP_TTL_MS).toISOString();
     await db.prepare(
@@ -150,7 +162,7 @@ export function createAuth(db, pepperString, options = {}) {
             body: {
               message: "Email delivery failed. Use this development-only verification code.",
               demoCode: code,
-              expiresAt
+              expiresInSeconds: OTP_TTL_MS / 1000
             }
           };
         }
@@ -164,7 +176,10 @@ export function createAuth(db, pepperString, options = {}) {
       }
       return {
         status: 200,
-        body: { message: "Verification code sent to your email. It expires in five minutes.", expiresAt }
+        body: {
+          message: "Verification code sent to your email. It expires in five minutes.",
+          expiresInSeconds: OTP_TTL_MS / 1000
+        }
       };
     }
 
@@ -174,17 +189,9 @@ export function createAuth(db, pepperString, options = {}) {
       body: {
         message: "Verification code sent. Check the development server terminal.",
         demoCode: code,
-        expiresAt
+        expiresInSeconds: OTP_TTL_MS / 1000
       }
     };
-  }
-
-  async function cleanExpired() {
-    const now = Date.now();
-    await db.prepare("DELETE FROM auth_sessions WHERE expires_at <= ?").run(new Date(now).toISOString());
-    for (const [key, entry] of attemptsByKey) {
-      if (entry.resetAt <= now) attemptsByKey.delete(key);
-    }
   }
 
   async function register({ username, email, password, role = "student" }, request) {
@@ -281,43 +288,51 @@ export function createAuth(db, pepperString, options = {}) {
       };
     }
 
-    const previousChallenge = await db.prepare(
-      "SELECT code_hash FROM otp_challenges WHERE user_id = ? ORDER BY id DESC LIMIT 1"
-    ).get(user.id);
-    return issueOtp(user, previousChallenge?.code_hash);
+    return issueOtp(user);
   }
 
-  async function resendOtp({ email }) {
+  async function resendOtp({ email, password }, request) {
+    const address = request?.socket?.remoteAddress ?? "unknown";
     const normalizedEmail = normalizeEmail(email ?? "");
+    if (
+      rateLimit(`resend-otp:ip:${address}`, 5, 15 * 60 * 1000) ||
+      rateLimit(`resend-otp:email:${normalizedEmail}`, 5, 15 * 60 * 1000)
+    ) {
+      return { status: 429, body: { error: "Too many code requests. Try again later." } };
+    }
+
     const user = await db.prepare(
-      "SELECT id, email FROM users WHERE email = ? AND is_active = 1"
+      "SELECT id, email, password_hash, password_salt, is_active FROM users WHERE email = ?"
     ).get(normalizedEmail);
-    if (!user) return { status: 401, body: { error: "No pending verification request. Sign in again." } };
+    const salt = user?.password_salt ? Buffer.from(user.password_salt, "base64url") : Buffer.alloc(16);
+    const actual = await hashPassword(
+      typeof password === "string" ? password : "",
+      salt,
+      pepper
+    );
+    if (!user || !user.is_active || !safeEqual(actual, user.password_hash)) {
+      return { status: 401, body: { error: "Invalid email or password." } };
+    }
 
     const challenge = await db.prepare(
-      `SELECT id, code_hash, expires_at FROM otp_challenges
-       WHERE user_id = ? AND consumed_at IS NULL ORDER BY id DESC LIMIT 1`
+      `SELECT id, expires_at, consumed_at FROM otp_challenges
+       WHERE user_id = ? ORDER BY id DESC LIMIT 1`
     ).get(user.id);
-    if (!challenge) {
-      return { status: 401, body: { error: "No pending verification request. Sign in again." } };
+    if (!challenge || challenge.consumed_at) {
+      return { status: 409, body: { error: "No pending verification code. Sign in again to request one." } };
     }
     if (Date.parse(challenge.expires_at) > Date.now()) {
-      return { status: 429, body: { error: "Your current code has not expired yet. Use it or wait for it to expire." } };
+      return { status: 409, body: { error: "Your current verification code has not expired yet." } };
     }
 
-    const recentResends = await db.prepare(
-      `SELECT COUNT(*) AS count FROM audit_logs
-       WHERE actor_user_id = ? AND action = 'auth.otp_resent'
-         AND created_at >= datetime('now', '-15 minutes')`
+    const recentChallenges = await db.prepare(
+      "SELECT COUNT(*) AS count FROM otp_challenges WHERE user_id = ? AND created_at >= datetime('now', '-1 hour')"
     ).get(user.id);
-    if (Number(recentResends.count) >= 3) {
-      return { status: 429, body: { error: "Too many resend requests. Try again in 15 minutes." } };
+    if (Number(recentChallenges.count) >= MAX_OTP_PER_HOUR) {
+      return { status: 429, body: { error: "Too many verification codes requested. Try again later." } };
     }
 
-    await db.prepare(
-      "INSERT INTO audit_logs (actor_user_id, action, target_type, target_id) VALUES (?, 'auth.otp_resent', 'user', ?)"
-    ).run(user.id, String(user.id));
-    return issueOtp(user, challenge.code_hash);
+    return issueOtp(user);
   }
 
   async function verifyOtp({ email, code }) {

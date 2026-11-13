@@ -3,6 +3,8 @@ const adminMessage = document.querySelector("#admin-message");
 const loginForm = document.querySelector("#login-panel");
 const registerForm = document.querySelector("#register-panel");
 const otpForm = document.querySelector("#otp-panel");
+const otpResendButton = document.querySelector("#otp-resend");
+const otpResendStatus = document.querySelector("#otp-resend-status");
 const signedInPanel = document.querySelector("#signed-in-panel");
 const adminPanel = document.querySelector("#admin-panel");
 const adminUserList = document.querySelector("#admin-user-list");
@@ -35,45 +37,12 @@ const dashboardTitle = document.querySelector("#operations-title");
 const dashboardEyebrow = operationsDashboard.querySelector(".eyebrow");
 const dashboardSubtitle = document.querySelector("#dashboard-subtitle");
 let pendingEmail = "";
+let otpExpiryTimer = null;
 let otpExpiresAt = 0;
-let otpCountdownTimer = null;
-let otpRequestPending = false;
 let dashboardRole = "";
 let dashboardData = null;
 let reportData = null;
 let reportFilter = "";
-
-function updateOtpCountdown() {
-  const resendButton = document.querySelector("#resend-otp-button");
-  const expiryStatus = document.querySelector("#otp-expiry-status");
-  if (!resendButton || !expiryStatus) return;
-
-  const remainingMs = Math.max(0, otpExpiresAt - Date.now());
-  if (remainingMs === 0) {
-    expiryStatus.textContent = "Your code has expired. You can request a new one.";
-    resendButton.textContent = "Resend code";
-    resendButton.disabled = otpRequestPending;
-    if (otpCountdownTimer) {
-      clearInterval(otpCountdownTimer);
-      otpCountdownTimer = null;
-    }
-    return;
-  }
-
-  const remainingSeconds = Math.ceil(remainingMs / 1000);
-  const minutes = Math.floor(remainingSeconds / 60);
-  const seconds = String(remainingSeconds % 60).padStart(2, "0");
-  expiryStatus.textContent = `Your code expires in ${minutes}:${seconds}.`;
-  resendButton.textContent = `Resend code in ${minutes}:${seconds}`;
-  resendButton.disabled = true;
-}
-
-function startOtpCountdown(expiresAt) {
-  otpExpiresAt = Date.parse(expiresAt) || Date.now() + 5 * 60 * 1000;
-  if (otpCountdownTimer) clearInterval(otpCountdownTimer);
-  updateOtpCountdown();
-  otpCountdownTimer = setInterval(updateOtpCountdown, 1000);
-}
 
 function showMessage(text, isError = false) {
   const target = !document.body.classList.contains("authenticated")
@@ -220,7 +189,33 @@ if (backToLoginButton) {
   backToLoginButton.addEventListener("click", () => {
     showPanel("login");
     pendingEmail = "";
+    if (otpExpiryTimer) clearInterval(otpExpiryTimer);
+    if (otpResendButton) {
+      otpResendButton.disabled = true;
+      otpResendButton.textContent = "Resend code";
+    }
   });
+}
+
+function startOtpExpiryCountdown(expiresInSeconds = 300) {
+  if (otpExpiryTimer) clearInterval(otpExpiryTimer);
+  otpExpiresAt = Date.now() + expiresInSeconds * 1000;
+  const update = () => {
+    const remaining = Math.max(0, Math.ceil((otpExpiresAt - Date.now()) / 1000));
+    if (otpResendButton) {
+      otpResendButton.disabled = remaining > 0;
+      otpResendButton.textContent = remaining > 0
+        ? `Resend code in ${Math.floor(remaining / 60)}:${String(remaining % 60).padStart(2, "0")}`
+        : "Resend code";
+    }
+    if (!remaining && otpExpiryTimer) {
+      clearInterval(otpExpiryTimer);
+      otpExpiryTimer = null;
+      if (otpResendStatus) otpResendStatus.textContent = "Your code expired. Request a fresh code to continue.";
+    }
+  };
+  update();
+  otpExpiryTimer = setInterval(update, 1000);
 }
 
 if (loginForm) {
@@ -249,7 +244,7 @@ if (loginForm) {
       if (otpEmail) otpEmail.textContent = email;
       if (otpInput) otpInput.value = "";
       showPanel("otp");
-      startOtpCountdown(result.expiresAt);
+      startOtpExpiryCountdown(result.expiresInSeconds);
       showMessage(result.demoCode
         ? `${result.message} Code: ${result.demoCode}`
         : result.message || "Verification code sent. Check your email for the 6-digit code.");
@@ -258,6 +253,37 @@ if (loginForm) {
       showMessage(error.message, true);
     } finally {
       if (submitBtn) submitBtn.disabled = false;
+    }
+  });
+}
+
+if (otpResendButton) {
+  otpResendButton.addEventListener("click", async () => {
+    if (!pendingEmail || Date.now() < otpExpiresAt) return;
+    const password = loginForm?.querySelector("input[name='password']")?.value;
+    if (!password) {
+      showMessage("Return to sign in and enter your password before requesting another code.", true);
+      return;
+    }
+
+    otpResendButton.disabled = true;
+    otpResendButton.textContent = "Sending code…";
+    try {
+      const result = await api("/api/auth/resend-otp", {
+        email: pendingEmail,
+        password
+      });
+      const otpInput = otpForm?.querySelector("input[name='code']");
+      if (otpInput) otpInput.value = "";
+      showMessage(result.demoCode
+        ? `${result.message} Code: ${result.demoCode}`
+        : result.message || "A new verification code was sent.");
+      startOtpExpiryCountdown(result.expiresInSeconds);
+      otpInput?.focus();
+    } catch (error) {
+      showMessage(error.message, true);
+      otpResendButton.disabled = false;
+      otpResendButton.textContent = "Resend code";
     }
   });
 }
@@ -291,32 +317,9 @@ if (registerForm) {
 
 if (otpForm) {
   const otpInput = otpForm.querySelector("input[name='code'], input[type='text']");
-  const resendButton = document.querySelector("#resend-otp-button");
   if (otpInput) {
     otpInput.addEventListener("input", () => {
       otpInput.value = otpInput.value.replace(/\D/g, "").slice(0, 6);
-    });
-  }
-  if (resendButton) {
-    resendButton.addEventListener("click", async () => {
-      if (Date.now() < otpExpiresAt || otpRequestPending) return;
-      otpRequestPending = true;
-      resendButton.disabled = true;
-      try {
-        const result = await api("/api/auth/resend-otp", { email: pendingEmail });
-        if (otpInput) otpInput.value = "";
-        startOtpCountdown(result.expiresAt);
-        showMessage(result.demoCode
-          ? `${result.message} Code: ${result.demoCode}`
-          : result.message || "A new verification code was sent to your email.");
-        otpInput?.focus();
-      } catch (error) {
-        showMessage(error.message, true);
-        resendButton.disabled = Date.now() < otpExpiresAt;
-      } finally {
-        otpRequestPending = false;
-        updateOtpCountdown();
-      }
     });
   }
 
@@ -346,6 +349,10 @@ bindNavigation(mobileAdminLink, "/admin");
     try {
       hideMessage();
       const result = await api("/api/auth/verify-otp", { email: pendingEmail, code });
+      if (otpExpiryTimer) clearInterval(otpExpiryTimer);
+      otpExpiryTimer = null;
+      const passwordInput = loginForm?.querySelector("input[name='password']");
+      if (passwordInput) passwordInput.value = "";
       showSignedIn(result.user);
     } catch (error) {
       showMessage(error.message, true);
